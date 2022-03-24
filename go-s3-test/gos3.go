@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -18,6 +20,7 @@ import (
 // Leverage the AWS SDK to grab the Keys/Secrets/Roles from Env vars
 //
 // set env S3_BUCKET="your-bucket-name"
+// set env S3_OBJECT="your-object-name"
 
 func main() {
 	// read bucket name from env
@@ -27,7 +30,10 @@ func main() {
 		m[parts[0]] = parts[1]
 	}
 	bucket := m["S3_BUCKET"]
-	fmt.Printf("Using S3 bucket '%s' from env S3_BUCKET\n", bucket)
+	object := m["S3_OBJECT"]
+	data := m["S3_DATA_FILE"]
+	role := m["S3_ROLE"]
+	fmt.Printf("Using S3 bucket '%s/%s' from env S3_BUCKET/S3_OBJECT for %s S3_ROLE \n", bucket, object, role)
 
 	// SharedConfigEnable seems to not be useful anymore...
 	// sess := session.Must(session.NewSessionWithOptions(session.Options{
@@ -39,6 +45,7 @@ func main() {
 		Endpoint:         aws.String(""),
 		DisableSSL:       aws.Bool(false),
 		S3ForcePathStyle: aws.Bool(false),
+		Region:           aws.String("us-east-1"),
 	}))
 
 	// Leverage STS API to see how AWS sees us
@@ -50,8 +57,36 @@ func main() {
 	output, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(output))
 
+	// manually assume role
+	// Create a STS client
+	// roleSvc := sts.New(sess)
+
+	// roleToAssumeArn := role
+	// sessionName := "test_session"
+	// roleResult, err := roleSvc.AssumeRole(&sts.AssumeRoleInput{
+	// 	RoleArn:         &roleToAssumeArn,
+	// 	RoleSessionName: &sessionName,
+	// })
+	// if err != nil {
+	// 	fmt.Println("AssumeRole Error", err)
+	// }
+
+	// fmt.Println(roleResult.AssumedRoleUser)
+
+	// result2, err2 := roleSvc.GetCallerIdentity(nil)
+	// if err2 != nil {
+	// 	fmt.Printf("Error getting caller identity: %v\n", err2)
+	// }
+	// output2, _ := json.MarshalIndent(result2, "", "  ")
+	// fmt.Println(string(output2))
+
 	// create the S3 session
-	svc := s3.New(sess)
+	svc := s3.New(sess, &aws.Config{
+		Region:                        aws.String("us-east-1"),
+		CredentialsChainVerboseErrors: aws.Bool(true),
+		LogLevel:                      aws.LogLevel(5),
+		// Credentials:                   svcSts.Config.Credentials,
+	})
 
 	// List S3 Buckets
 	bl, err := svc.ListBuckets(&s3.ListBucketsInput{})
@@ -66,25 +101,67 @@ func main() {
 			// Message from an error.
 			fmt.Println(err.Error())
 		}
-		return
 	}
 
 	fmt.Println(bl)
-	fmt.Println("----------------------------------------------")
 
-	// Get the object myfile from the bucket
+	fmt.Println("------- start list object in bucket ----------")
+
+	startAfter := object
+	if objectID, err := strconv.Atoi(object); err == nil {
+		startAfter = strconv.Itoa(objectID - 1)
+	}
+
+	fmt.Printf("Using Object ID %s\n", startAfter)
+
+	objectList, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{
+		Bucket:     aws.String(bucket),
+		MaxKeys:    aws.Int64(1),
+		FetchOwner: aws.Bool(true),
+		StartAfter: aws.String(startAfter),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case s3.ErrCodeNoSuchBucket:
+				fmt.Println(s3.ErrCodeNoSuchBucket, aerr.Error())
+			default:
+				fmt.Println(aerr.Error())
+			}
+		} else {
+			// Print the error, cast err to awserr.Error to get the Code and
+			// Message from an error.
+			fmt.Println(err.Error())
+		}
+	}
+	fmt.Println(objectList)
+
+	fmt.Println("------- start get object ----------")
+	// Get the object from the bucket
 	// If the bucket is empty you will have an error
 	out, err := svc.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String("myfile"),
+		Key:    aws.String(object),
 	})
 	if err != nil {
 		fmt.Println(err.Error())
 	}
 
-	fmt.Println(out)
-	fmt.Println("----------------------------------------------")
+	defer out.Body.Close()
 
+	fmt.Println(out)
+
+	buf := new(bytes.Buffer)
+	buf.ReadFrom(out.Body)
+	newStr := buf.String()
+
+	fmt.Println(newStr)
+
+	if data == "" {
+		return
+	}
+
+	fmt.Println("------- start push object ----------")
 	// Open the local file "myfile" and upload it into the bucket
 	f, err := os.Open("myfile")
 	if err != nil {

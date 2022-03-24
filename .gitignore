@@ -14,4 +14,6 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-aws-go-sdk-test
+go-s3-test/go-s3-test
+go-ec2-drill-test/go-ec2-drill-test
+go-ec2-drill-test-v2/go-ec2-drill-test-v2
