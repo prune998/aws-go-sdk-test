@@ -51,11 +51,11 @@ func main() {
 		},
 	}
 
+	// Search all ENIs that belongs to selected instances
+	NetworkInterfaceIds := []string{}
 	paginator := ec2.NewDescribeInstancesPaginator(svc, params, func(o *ec2.DescribeInstancesPaginatorOptions) {
 		o.Limit = 5
 	})
-
-	subnetIDs := []string{}
 
 	for paginator.HasMorePages() {
 		output, err := paginator.NextPage(context.TODO())
@@ -72,28 +72,33 @@ func main() {
 						break
 					}
 				}
-				fmt.Println(c, nt, *i.InstanceId, i.State.Name)
-
-				// for each instance, list ENIs
-				fmt.Println(*i.SubnetId)
-				subnetIDs = append(subnetIDs, *i.SubnetId)
+				fmt.Println(c, nt, *i.InstanceId, i.State.Name, *i.SubnetId)
+				for ic, ifs := range i.NetworkInterfaces {
+					fmt.Println(ic,
+						"'"+*ifs.Description+"'",
+						*ifs.SubnetId, ifs.InterfaceType,
+						*ifs.PrivateIpAddress,
+						aws.ToString(ifs.MacAddress),
+						aws.ToString(ifs.NetworkInterfaceId),
+						aws.ToInt32(ifs.Attachment.DeviceIndex),
+						aws.ToString(ifs.NetworkInterfaceId),
+					)
+					NetworkInterfaceIds = append(NetworkInterfaceIds, aws.ToString(ifs.NetworkInterfaceId))
+				}
 			}
 		}
 
 	}
 
+	// Build a filter to seach ENIS based on selected ENIS
+	// we need to do that as we want `ec2_types.NetworkInterface` and not `ec2_types.InstanceNetworkInterface`
 	input := &ec2.DescribeNetworkInterfacesInput{}
-	if len(subnetIDs) > 0 {
-		input.Filters = []ec2_types.Filter{
-			{
-				Name:   aws.String("subnet-id"),
-				Values: subnetIDs,
-			},
-		}
+	if len(NetworkInterfaceIds) > 0 {
+		input.NetworkInterfaceIds = NetworkInterfaceIds
 	}
 
+	// Search for the ENIs data
 	var ENIs []ec2_types.NetworkInterface
-
 	ENIPaginator := ec2.NewDescribeNetworkInterfacesPaginator(svc, input)
 	for ENIPaginator.HasMorePages() {
 		output, err := ENIPaginator.NextPage(context.TODO())
@@ -108,31 +113,14 @@ func main() {
 	fmt.Println("printing ENIs")
 	fmt.Println("InstanceId | NetworkInterfaceId | SubnetId | DeviceIndex")
 	for _, iface := range ENIs {
-		// fmt.Println(*iface.Attachment.InstanceId, *iface.NetworkInterfaceId, *iface.SubnetId, *iface.Attachment.DeviceIndex)
-		// if iface.InterfaceType == ec2_types.NetworkInterfaceTypeInterface {
-		fmt.Println("'"+*iface.Description+"'", *iface.SubnetId, iface.InterfaceType, *iface.PrivateIpAddress)
-
-		if iface.Attachment != nil {
-			fmt.Println(int(aws.ToInt32(iface.Attachment.DeviceIndex)))
-
-			if iface.Attachment.InstanceId != nil {
-				fmt.Println(aws.ToString(iface.Attachment.InstanceId))
-			}
-			fmt.Println(aws.ToInt32(iface.Attachment.DeviceIndex))
-		}
-		// }
+		fmt.Println(
+			"'"+*iface.Description+"'",
+			aws.ToString(iface.SubnetId),
+			iface.InterfaceType,
+			aws.ToString(iface.PrivateIpAddress),
+			aws.ToInt32(iface.Attachment.DeviceIndex),
+			aws.ToString(iface.Attachment.InstanceId),
+			aws.ToInt32(iface.Attachment.DeviceIndex),
+		)
 	}
-	// fmt.Println(res.Reservations)
-	// for c, r := range res.Reservations {
-	// 	for _, i := range r.Instances {
-	// 		var nt string
-	// 		for _, t := range i.Tags {
-	// 			if *t.Key == "Name" {
-	// 				nt = *t.Value
-	// 				break
-	// 			}
-	// 		}
-	// 		fmt.Println(c, nt, *i.InstanceId, *&i.State.Name)
-	// 	}
-	// }
 }
